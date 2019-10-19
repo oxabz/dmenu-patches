@@ -1,0 +1,664 @@
+From 84c072f6cf478744ed050c61f7dc394e70a251ff Mon Sep 17 00:00:00 2001
+From: oxabz <legmatt0@gmail.com>
+Date: Mon, 14 Oct 2019 13:29:35 +0200
+Subject: [PATCH 1/2] Implement Script Input Mode
+
+---
+ config.h | 23 +++++++++++++++++
+ dmenu.c  | 77 ++++++++++++++++++++++++++++++++++++++++++++++++++------
+ 2 files changed, 93 insertions(+), 7 deletions(-)
+ create mode 100644 config.h
+
+diff --git a/config.h b/config.h
+new file mode 100644
+index 0000000..1edb647
+--- /dev/null
++++ b/config.h
+@@ -0,0 +1,23 @@
++/* See LICENSE file for copyright and license details. */
++/* Default settings; can be overriden by command line. */
++
++static int topbar = 1;                      /* -b  option; if 0, dmenu appears at bottom     */
++/* -fn option overrides fonts[0]; default X11 font or font set */
++static const char *fonts[] = {
++	"monospace:size=10"
++};
++static const char *prompt      = NULL;      /* -p  option; prompt to the left of input field */
++static const char *colors[SchemeLast][2] = {
++	/*     fg         bg       */
++	[SchemeNorm] = { "#bbbbbb", "#222222" },
++	[SchemeSel] = { "#eeeeee", "#005577" },
++	[SchemeOut] = { "#000000", "#00ffff" },
++};
++/* -l option; if nonzero, dmenu uses vertical list with given number of lines */
++static unsigned int lines      = 0;
++
++/*
++ * Characters not considered part of a word while deleting words
++ * for example: " /?\"&[]"
++ */
++static const char worddelimiters[] = " ";
+diff --git a/dmenu.c b/dmenu.c
+index 65f25ce..d442deb 100644
+--- a/dmenu.c
++++ b/dmenu.c
+@@ -44,6 +44,8 @@ static struct item *items = NULL;
+ static struct item *matches, *matchend;
+ static struct item *prev, *curr, *next, *sel;
+ static int mon = -1, screen;
++static char scriptmode;
++static char* scriptpath;
+ 
+ static Atom clip, utf8;
+ static Display *dpy;
+@@ -58,6 +60,47 @@ static Clr *scheme[SchemeLast];
+ static int (*fstrncmp)(const char *, const char *, size_t) = strncmp;
+ static char *(*fstrstr)(const char *, const char *) = strstr;
+ 
++static void
++readscript(void)
++{
++    char buf[sizeof text], *p;
++    size_t i, imax = 0, size = 0;
++    unsigned int tmpmax = 0;
++
++    char command[BUFSIZ];
++
++    sprintf(command, "%s %s", scriptpath, text);
++
++    FILE * stdo = popen( command ,"r");
++    if (stdo == NULL){
++        die("Unable to open the script %s ", scriptpath);
++    }
++
++
++    /* read each line from script stdout and add it to the item list */
++    for (i = 0; fgets(buf, sizeof buf, stdo); i++) {
++        if (i + 1 >= size / sizeof *items)
++            if (!(items = realloc(items, (size += BUFSIZ))))
++                die("cannot realloc %u bytes:", size);
++        if ((p = strchr(buf, '\n')))
++            *p = '\0';
++        if (!(items[i].text = strdup(buf)))
++            die("cannot strdup %u bytes:", strlen(buf) + 1);
++        items[i].out = 0;
++        drw_font_getexts(drw->fonts, buf, strlen(buf), &tmpmax, NULL);
++        if (tmpmax > inputw) {
++            inputw = tmpmax;
++            imax = i;
++        }
++    }
++    if (items)
++        items[i].text = NULL;
++    inputw = items ? TEXTW(items[imax].text) : 0;
++    lines = MIN(lines, i);
++
++    pclose (stdo);
++}
++
+ static void
+ appenditem(struct item *item, struct item **list, struct item **last)
+ {
+@@ -274,6 +317,9 @@ insert(const char *str, ssize_t n)
+ 	if (n > 0)
+ 		memcpy(&text[cursor], str, n);
+ 	cursor += n;
++  if(scriptmode){
++    readscript();
++  }
+ 	match();
+ }
+ 
+@@ -492,6 +538,9 @@ insert:
+ 		strncpy(text, sel->text, sizeof text - 1);
+ 		text[sizeof text - 1] = '\0';
+ 		cursor = strlen(text);
++    if(scriptmode){
++      readscript();
++    }
+ 		match();
+ 		break;
+ 	}
+@@ -689,7 +738,7 @@ setup(void)
+ static void
+ usage(void)
+ {
+-	fputs("usage: dmenu [-bfiv] [-l lines] [-p prompt] [-fn font] [-m monitor]\n"
++	fputs("usage: dmenu [-bfiv] [-l lines] [-p prompt] [-fn font] [-m monitor] [-s script]\n"
+ 	      "             [-nb color] [-nf color] [-sb color] [-sf color] [-w windowid]\n", stderr);
+ 	exit(1);
+ }
+@@ -731,6 +780,10 @@ main(int argc, char *argv[])
+ 			colors[SchemeSel][ColBg] = argv[++i];
+ 		else if (!strcmp(argv[i], "-sf"))  /* selected foreground color */
+ 			colors[SchemeSel][ColFg] = argv[++i];
++    else if (!strcmp(argv[i], "-s")){
++      scriptmode = 1;
++      scriptpath = argv[++i];
++    }
+ 		else if (!strcmp(argv[i], "-w"))   /* embedding window id */
+ 			embed = argv[++i];
+ 		else
+@@ -757,12 +810,22 @@ main(int argc, char *argv[])
+ 		die("pledge");
+ #endif
+ 
+-	if (fast && !isatty(0)) {
+-		grabkeyboard();
+-		readstdin();
+-	} else {
+-		readstdin();
+-		grabkeyboard();
++	if(scriptmode){
++    if (fast && !isatty(0)) {
++      grabkeyboard();
++      readscript();
++    } else {
++      readscript();
++      grabkeyboard();
++    }
++	} else{
++    if (fast && !isatty(0)) {
++      grabkeyboard();
++      readstdin();
++    } else {
++      readstdin();
++      grabkeyboard();
++    }
+ 	}
+ 	setup();
+ 	run();
+-- 
+2.23.0
+
+
+From 93fd4fb33f3b6fab06c8b341cd0360eb3428d4cc Mon Sep 17 00:00:00 2001
+From: oxabz <legmatt0@gmail.com>
+Date: Tue, 15 Oct 2019 11:24:09 +0200
+Subject: [PATCH 2/2] Parallelize script
+
+---
+ dmenu-script-input-20191014-84c072f.diff | 173 +++++++++++++++++++++
+ dmenu.c                                  | 183 +++++++++++++----------
+ 2 files changed, 281 insertions(+), 75 deletions(-)
+ create mode 100644 dmenu-script-input-20191014-84c072f.diff
+
+diff --git a/dmenu-script-input-20191014-84c072f.diff b/dmenu-script-input-20191014-84c072f.diff
+new file mode 100644
+index 0000000..6c047a3
+--- /dev/null
++++ b/dmenu-script-input-20191014-84c072f.diff
+@@ -0,0 +1,173 @@
++From 84c072f6cf478744ed050c61f7dc394e70a251ff Mon Sep 17 00:00:00 2001
++From: oxabz <legmatt0@gmail.com>
++Date: Mon, 14 Oct 2019 13:29:35 +0200
++Subject: [PATCH] Implement Script Input Mode
++
++---
++ config.h | 23 +++++++++++++++++
++ dmenu.c  | 77 ++++++++++++++++++++++++++++++++++++++++++++++++++------
++ 2 files changed, 93 insertions(+), 7 deletions(-)
++ create mode 100644 config.h
++
++diff --git a/config.h b/config.h
++new file mode 100644
++index 0000000..1edb647
++--- /dev/null
+++++ b/config.h
++@@ -0,0 +1,23 @@
+++/* See LICENSE file for copyright and license details. */
+++/* Default settings; can be overriden by command line. */
+++
+++static int topbar = 1;                      /* -b  option; if 0, dmenu appears at bottom     */
+++/* -fn option overrides fonts[0]; default X11 font or font set */
+++static const char *fonts[] = {
+++	"monospace:size=10"
+++};
+++static const char *prompt      = NULL;      /* -p  option; prompt to the left of input field */
+++static const char *colors[SchemeLast][2] = {
+++	/*     fg         bg       */
+++	[SchemeNorm] = { "#bbbbbb", "#222222" },
+++	[SchemeSel] = { "#eeeeee", "#005577" },
+++	[SchemeOut] = { "#000000", "#00ffff" },
+++};
+++/* -l option; if nonzero, dmenu uses vertical list with given number of lines */
+++static unsigned int lines      = 0;
+++
+++/*
+++ * Characters not considered part of a word while deleting words
+++ * for example: " /?\"&[]"
+++ */
+++static const char worddelimiters[] = " ";
++diff --git a/dmenu.c b/dmenu.c
++index 65f25ce..d442deb 100644
++--- a/dmenu.c
+++++ b/dmenu.c
++@@ -44,6 +44,8 @@ static struct item *items = NULL;
++ static struct item *matches, *matchend;
++ static struct item *prev, *curr, *next, *sel;
++ static int mon = -1, screen;
+++static char scriptmode;
+++static char* scriptpath;
++ 
++ static Atom clip, utf8;
++ static Display *dpy;
++@@ -58,6 +60,47 @@ static Clr *scheme[SchemeLast];
++ static int (*fstrncmp)(const char *, const char *, size_t) = strncmp;
++ static char *(*fstrstr)(const char *, const char *) = strstr;
++ 
+++static void
+++readscript(void)
+++{
+++    char buf[sizeof text], *p;
+++    size_t i, imax = 0, size = 0;
+++    unsigned int tmpmax = 0;
+++
+++    char command[BUFSIZ];
+++
+++    sprintf(command, "%s %s", scriptpath, text);
+++
+++    FILE * stdo = popen( command ,"r");
+++    if (stdo == NULL){
+++        die("Unable to open the script %s ", scriptpath);
+++    }
+++
+++
+++    /* read each line from script stdout and add it to the item list */
+++    for (i = 0; fgets(buf, sizeof buf, stdo); i++) {
+++        if (i + 1 >= size / sizeof *items)
+++            if (!(items = realloc(items, (size += BUFSIZ))))
+++                die("cannot realloc %u bytes:", size);
+++        if ((p = strchr(buf, '\n')))
+++            *p = '\0';
+++        if (!(items[i].text = strdup(buf)))
+++            die("cannot strdup %u bytes:", strlen(buf) + 1);
+++        items[i].out = 0;
+++        drw_font_getexts(drw->fonts, buf, strlen(buf), &tmpmax, NULL);
+++        if (tmpmax > inputw) {
+++            inputw = tmpmax;
+++            imax = i;
+++        }
+++    }
+++    if (items)
+++        items[i].text = NULL;
+++    inputw = items ? TEXTW(items[imax].text) : 0;
+++    lines = MIN(lines, i);
+++
+++    pclose (stdo);
+++}
+++
++ static void
++ appenditem(struct item *item, struct item **list, struct item **last)
++ {
++@@ -274,6 +317,9 @@ insert(const char *str, ssize_t n)
++ 	if (n > 0)
++ 		memcpy(&text[cursor], str, n);
++ 	cursor += n;
+++  if(scriptmode){
+++    readscript();
+++  }
++ 	match();
++ }
++ 
++@@ -492,6 +538,9 @@ insert:
++ 		strncpy(text, sel->text, sizeof text - 1);
++ 		text[sizeof text - 1] = '\0';
++ 		cursor = strlen(text);
+++    if(scriptmode){
+++      readscript();
+++    }
++ 		match();
++ 		break;
++ 	}
++@@ -689,7 +738,7 @@ setup(void)
++ static void
++ usage(void)
++ {
++-	fputs("usage: dmenu [-bfiv] [-l lines] [-p prompt] [-fn font] [-m monitor]\n"
+++	fputs("usage: dmenu [-bfiv] [-l lines] [-p prompt] [-fn font] [-m monitor] [-s script]\n"
++ 	      "             [-nb color] [-nf color] [-sb color] [-sf color] [-w windowid]\n", stderr);
++ 	exit(1);
++ }
++@@ -731,6 +780,10 @@ main(int argc, char *argv[])
++ 			colors[SchemeSel][ColBg] = argv[++i];
++ 		else if (!strcmp(argv[i], "-sf"))  /* selected foreground color */
++ 			colors[SchemeSel][ColFg] = argv[++i];
+++    else if (!strcmp(argv[i], "-s")){
+++      scriptmode = 1;
+++      scriptpath = argv[++i];
+++    }
++ 		else if (!strcmp(argv[i], "-w"))   /* embedding window id */
++ 			embed = argv[++i];
++ 		else
++@@ -757,12 +810,22 @@ main(int argc, char *argv[])
++ 		die("pledge");
++ #endif
++ 
++-	if (fast && !isatty(0)) {
++-		grabkeyboard();
++-		readstdin();
++-	} else {
++-		readstdin();
++-		grabkeyboard();
+++	if(scriptmode){
+++    if (fast && !isatty(0)) {
+++      grabkeyboard();
+++      readscript();
+++    } else {
+++      readscript();
+++      grabkeyboard();
+++    }
+++	} else{
+++    if (fast && !isatty(0)) {
+++      grabkeyboard();
+++      readstdin();
+++    } else {
+++      readstdin();
+++      grabkeyboard();
+++    }
++ 	}
++ 	setup();
++ 	run();
++-- 
++2.23.0
++
+diff --git a/dmenu.c b/dmenu.c
+index d442deb..24d8653 100644
+--- a/dmenu.c
++++ b/dmenu.c
+@@ -6,6 +6,7 @@
+ #include <string.h>
+ #include <strings.h>
+ #include <time.h>
++#include <pthread.h>
+ #include <unistd.h>
+ 
+ #include <X11/Xlib.h>
+@@ -46,6 +47,7 @@ static struct item *prev, *curr, *next, *sel;
+ static int mon = -1, screen;
+ static char scriptmode;
+ static char* scriptpath;
++static char* updateNead;
+ 
+ static Atom clip, utf8;
+ static Display *dpy;
+@@ -60,47 +62,10 @@ static Clr *scheme[SchemeLast];
+ static int (*fstrncmp)(const char *, const char *, size_t) = strncmp;
+ static char *(*fstrstr)(const char *, const char *) = strstr;
+ 
+-static void
+-readscript(void)
+-{
+-    char buf[sizeof text], *p;
+-    size_t i, imax = 0, size = 0;
+-    unsigned int tmpmax = 0;
+-
+-    char command[BUFSIZ];
+ 
+-    sprintf(command, "%s %s", scriptpath, text);
+ 
+-    FILE * stdo = popen( command ,"r");
+-    if (stdo == NULL){
+-        die("Unable to open the script %s ", scriptpath);
+-    }
+ 
+ 
+-    /* read each line from script stdout and add it to the item list */
+-    for (i = 0; fgets(buf, sizeof buf, stdo); i++) {
+-        if (i + 1 >= size / sizeof *items)
+-            if (!(items = realloc(items, (size += BUFSIZ))))
+-                die("cannot realloc %u bytes:", size);
+-        if ((p = strchr(buf, '\n')))
+-            *p = '\0';
+-        if (!(items[i].text = strdup(buf)))
+-            die("cannot strdup %u bytes:", strlen(buf) + 1);
+-        items[i].out = 0;
+-        drw_font_getexts(drw->fonts, buf, strlen(buf), &tmpmax, NULL);
+-        if (tmpmax > inputw) {
+-            inputw = tmpmax;
+-            imax = i;
+-        }
+-    }
+-    if (items)
+-        items[i].text = NULL;
+-    inputw = items ? TEXTW(items[imax].text) : 0;
+-    lines = MIN(lines, i);
+-
+-    pclose (stdo);
+-}
+-
+ static void
+ appenditem(struct item *item, struct item **list, struct item **last)
+ {
+@@ -218,6 +183,66 @@ drawmenu(void)
+ 	drw_map(drw, win, 0, 0, mw, mh);
+ }
+ 
++
++void*
++readscript(char wait)
++{
++    char buf[sizeof text], *p;
++    size_t i, imax = 0, size = 0;
++    unsigned int tmpmax = 0;
++
++    char command[BUFSIZ];
++
++    sprintf(command, "%s %s", scriptpath, text);
++
++    FILE * stdo = popen( command ,"r");
++    if (stdo == NULL){
++        die("Unable to open the script %s ", scriptpath);
++    }
++
++
++    /* read each line from script stdout and add it to the item list */
++    for (i = 0; fgets(buf, sizeof buf, stdo); i++) {
++        if (i + 1 >= size / sizeof *items)
++            if (!(items = realloc(items, (size += BUFSIZ))))
++                die("cannot realloc %u bytes:", size);
++        if ((p = strchr(buf, '\n')))
++            *p = '\0';
++        if (!(items[i].text = strdup(buf)))
++            die("cannot strdup %u bytes:", strlen(buf) + 1);
++        items[i].out = 0;
++        drw_font_getexts(drw->fonts, buf, strlen(buf), &tmpmax, NULL);
++        if (tmpmax > inputw) {
++            inputw = tmpmax;
++            imax = i;
++        }
++    }
++    if (items)
++        items[i].text = NULL;
++    inputw = items ? TEXTW(items[imax].text) : 0;
++    lines = MIN(lines, i);
++
++    pclose (stdo);
++
++    if(!wait){
++        updateNead = 1;
++    }
++}
++
++static void
++updateItems(char wait)
++{
++    pthread_t thread1;
++
++    if(pthread_create(&thread1, NULL, readscript, wait) == -1) {
++        die("pthread_create error");
++    }
++
++    if(wait){
++        pthread_join(thread1, NULL);
++    }
++}
++
+ static void
+ grabfocus(void)
+ {
+@@ -317,9 +342,9 @@ insert(const char *str, ssize_t n)
+ 	if (n > 0)
+ 		memcpy(&text[cursor], str, n);
+ 	cursor += n;
+-  if(scriptmode){
+-    readscript();
+-  }
++    if(scriptmode){
++        updateItems(0);
++    }
+ 	match();
+ }
+ 
+@@ -369,6 +394,8 @@ keypress(XKeyEvent *ev)
+ 		break;
+ 	}
+ 
++
++
+ 	if (ev->state & ControlMask) {
+ 		switch(ksym) {
+ 		case XK_a: ksym = XK_Home;      break;
+@@ -538,9 +565,9 @@ insert:
+ 		strncpy(text, sel->text, sizeof text - 1);
+ 		text[sizeof text - 1] = '\0';
+ 		cursor = strlen(text);
+-    if(scriptmode){
+-      readscript();
+-    }
++        if(scriptmode){
++            updateItems(0);
++        }
+ 		match();
+ 		break;
+ 	}
+@@ -596,20 +623,24 @@ readstdin(void)
+ 	lines = MIN(lines, i);
+ }
+ 
++
++
+ static void
+ run(void)
+ {
+ 	XEvent ev;
+ 
+ 	while (!XNextEvent(dpy, &ev)) {
+-		if (XFilterEvent(&ev, win))
++
++	    if(updateNead){
++	        match();
++	        drawmenu();
++	        updateNead = 0;
++	    }
++
++		if (XFilterEvent(&ev, None))
+ 			continue;
+ 		switch(ev.type) {
+-		case DestroyNotify:
+-			if (ev.xdestroywindow.window != win)
+-				break;
+-			cleanup();
+-			exit(1);
+ 		case Expose:
+ 			if (ev.xexpose.count == 0)
+ 				drw_map(drw, win, 0, 0, mw, mh);
+@@ -713,17 +744,15 @@ setup(void)
+ 	                    CWOverrideRedirect | CWBackPixel | CWEventMask, &swa);
+ 	XSetClassHint(dpy, win, &ch);
+ 
+-
+-	/* input methods */
+-	if ((xim = XOpenIM(dpy, NULL, NULL, NULL)) == NULL)
+-		die("XOpenIM failed: could not open input device");
+-
++	/* open input methods */
++	xim = XOpenIM(dpy, NULL, NULL, NULL);
+ 	xic = XCreateIC(xim, XNInputStyle, XIMPreeditNothing | XIMStatusNothing,
+ 	                XNClientWindow, win, XNFocusWindow, win, NULL);
+ 
+ 	XMapRaised(dpy, win);
++	XSetInputFocus(dpy, win, RevertToParent, CurrentTime);
+ 	if (embed) {
+-		XSelectInput(dpy, parentwin, FocusChangeMask | SubstructureNotifyMask);
++		XSelectInput(dpy, parentwin, FocusChangeMask);
+ 		if (XQueryTree(dpy, parentwin, &dw, &w, &dws, &du) && dws) {
+ 			for (i = 0; i < du && dws[i] != win; ++i)
+ 				XSelectInput(dpy, dws[i], FocusChangeMask);
+@@ -738,8 +767,9 @@ setup(void)
+ static void
+ usage(void)
+ {
+-	fputs("usage: dmenu [-bfiv] [-l lines] [-p prompt] [-fn font] [-m monitor] [-s script]\n"
+-	      "             [-nb color] [-nf color] [-sb color] [-sf color] [-w windowid]\n", stderr);
++	fputs("usage: dmenu [-bfiv] [-l lines] [-p prompt] [-fn font] [-m monitor]\n"
++	      "             [-nb color] [-nf color] [-sb color] [-sf color] [-w windowid]\n"
++          "             [-s script]", stderr);
+ 	exit(1);
+ }
+ 
+@@ -780,10 +810,10 @@ main(int argc, char *argv[])
+ 			colors[SchemeSel][ColBg] = argv[++i];
+ 		else if (!strcmp(argv[i], "-sf"))  /* selected foreground color */
+ 			colors[SchemeSel][ColFg] = argv[++i];
+-    else if (!strcmp(argv[i], "-s")){
+-      scriptmode = 1;
+-      scriptpath = argv[++i];
+-    }
++        else if (!strcmp(argv[i], "-s")){
++            scriptmode = 1;
++            scriptpath = argv[++i];
++        }
+ 		else if (!strcmp(argv[i], "-w"))   /* embedding window id */
+ 			embed = argv[++i];
+ 		else
+@@ -791,6 +821,8 @@ main(int argc, char *argv[])
+ 
+ 	if (!setlocale(LC_CTYPE, "") || !XSupportsLocale())
+ 		fputs("warning: no locale support\n", stderr);
++	if (!XSetLocaleModifiers(""))
++		fputs("warning: no locale modifiers support\n", stderr);
+ 	if (!(dpy = XOpenDisplay(NULL)))
+ 		die("cannot open display");
+ 	screen = DefaultScreen(dpy);
+@@ -811,22 +843,23 @@ main(int argc, char *argv[])
+ #endif
+ 
+ 	if(scriptmode){
+-    if (fast && !isatty(0)) {
+-      grabkeyboard();
+-      readscript();
+-    } else {
+-      readscript();
+-      grabkeyboard();
+-    }
++        if (fast && !isatty(0)) {
++            grabkeyboard();
++            updateItems(1);
++        } else {
++            updateItems(1);
++            grabkeyboard();
++        }
+ 	} else{
+-    if (fast && !isatty(0)) {
+-      grabkeyboard();
+-      readstdin();
+-    } else {
+-      readstdin();
+-      grabkeyboard();
+-    }
++        if (fast && !isatty(0)) {
++            grabkeyboard();
++            readstdin();
++        } else {
++            readstdin();
++            grabkeyboard();
++        }
+ 	}
++
+ 	setup();
+ 	run();
+ 
+-- 
+2.23.0
+
