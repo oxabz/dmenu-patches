@@ -15,5 +15,5 @@ cd dmenu_path
 git branch -b my_dmenu
 git apply the_patch.diff
 make 
-install
+make install
 ```
