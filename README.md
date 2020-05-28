@@ -6,7 +6,7 @@ Allow you to specify a script to dynamicly update the list of entries in dmenu
 ``` sh
 dmenu -s "your script"
 ```
-The patch will exxecute the script upon each keystroke 
+The patch will execute the script upon each keystroke 
 It will take the list from the standard output of the script (each line an new entry)
 The search text entered by the user will be put in the first argument of the script
 ## Install
